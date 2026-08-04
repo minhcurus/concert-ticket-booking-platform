@@ -22,10 +22,12 @@ public class ExceptionHandlingMiddleware
         {
             await _next(context);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
-            // The client disconnected or the request was cancelled — there is no response to
-            // write, and this is routine under load, not a server error.
+            // The client disconnected — there is no response to write, and this is routine
+            // under load, not a server error. A cancellation NOT caused by the client aborting
+            // (e.g. an internal timeout) falls through to the generic handler below instead of
+            // being silently swallowed into a bodyless 200.
         }
         catch (Exception ex)
         {

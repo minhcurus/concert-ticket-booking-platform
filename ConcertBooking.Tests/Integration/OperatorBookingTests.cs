@@ -118,6 +118,37 @@ public class OperatorBookingTests
     }
 
     [Fact]
+    public async Task OverrideStatus_ConfirmedToPendingPayment_RefreshesHoldExpiresAt()
+    {
+        var client = CustomerClient($"override-confirmed-{Guid.NewGuid()}");
+        var createResponse = await client.PostAsJsonAsync("/api/bookings", new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 1) }, null));
+        var booking = await createResponse.Content.ReadFromJsonAsync<BookingDto>();
+
+        var confirmResponse = await client.PostAsync($"/api/bookings/{booking!.Id}/confirm-payment", null);
+        Assert.Equal(HttpStatusCode.OK, confirmResponse.StatusCode);
+
+        // A Confirmed booking's HoldExpiresAt is whatever it was at creation time (10 minutes
+        // out) and is never touched again — simulate one confirmed long enough ago that,
+        // without the fix, overriding it back to PendingPayment would leave it immediately
+        // eligible for the next sweep tick to re-expire.
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var entity = await db.Bookings.SingleAsync(b => b.Id == booking.Id);
+            entity.HoldExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-30);
+            await db.SaveChangesAsync();
+        }
+
+        var overrideResponse = await OperatorClient().PutAsJsonAsync($"/api/operator/bookings/{booking.Id}/status", new UpdateBookingStatusRequest("PendingPayment"));
+        Assert.Equal(HttpStatusCode.OK, overrideResponse.StatusCode);
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var refreshed = await verifyDb.Bookings.AsNoTracking().SingleAsync(b => b.Id == booking.Id);
+        Assert.True(refreshed.HoldExpiresAt > DateTimeOffset.UtcNow.AddMinutes(5));
+    }
+
+    [Fact]
     public async Task List_FiltersByFlagged()
     {
         var createResponse = await CustomerClient($"filter-{Guid.NewGuid()}")

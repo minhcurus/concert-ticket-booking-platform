@@ -36,8 +36,11 @@ public class CatalogService : ICatalogService
             if (!cached.IsNullOrEmpty)
                 return JsonSerializer.Deserialize<List<ConcertSummaryDto>>((string)cached!)!;
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Catches RedisException (connection failures), TimeoutException (RedisTimeoutException
+            // derives from TimeoutException, not RedisException) and a malformed/schema-drifted
+            // cached payload (JsonException) — any of these must fall through to Postgres, not fail.
             _logger.LogWarning(ex, "Catalog cache read failed, falling through to Postgres");
         }
 
@@ -53,7 +56,7 @@ public class CatalogService : ICatalogService
         {
             await _redis.GetDatabase().StringSetAsync(cacheKey, JsonSerializer.Serialize(concerts), ListCacheTtl);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Catalog cache write failed; serving uncached result");
         }

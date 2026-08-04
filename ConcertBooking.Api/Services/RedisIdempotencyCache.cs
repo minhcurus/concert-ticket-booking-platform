@@ -28,8 +28,11 @@ public class RedisIdempotencyCache : IIdempotencyCache
             var value = await db.StringGetAsync(Key(idempotencyKey));
             return value.IsNullOrEmpty ? null : Guid.Parse((string)value!);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // Catches RedisException (connection failures) and TimeoutException (RedisTimeoutException
+            // derives from TimeoutException, not RedisException — a slow-but-up Redis under flash-sale
+            // load must degrade exactly like a down one) and any other transient failure.
             _logger.LogWarning(ex, "Idempotency cache read failed, falling through to Postgres");
             return null;
         }
@@ -42,7 +45,7 @@ public class RedisIdempotencyCache : IIdempotencyCache
             var db = _redis.GetDatabase();
             await db.StringSetAsync(Key(idempotencyKey), bookingId.ToString(), ttl, When.NotExists);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Idempotency cache write failed; the DB unique constraint remains the source of truth");
         }

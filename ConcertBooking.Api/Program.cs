@@ -13,7 +13,17 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
 
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
-    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+{
+    // AbortOnConnectFail defaults to true, which makes Connect() throw immediately if Redis is
+    // unreachable at startup — since this is a singleton factory, that failure isn't cached and
+    // every subsequent request would retry and fail the same way, making the whole API unusable
+    // on a cold start with Redis down. Disabling it lets Connect() return a disconnected
+    // multiplexer that keeps retrying in the background; callers (RedisIdempotencyCache,
+    // CatalogService) already degrade to Postgres when a command against it fails.
+    var options = ConfigurationOptions.Parse(builder.Configuration.GetConnectionString("Redis")!);
+    options.AbortOnConnectFail = false;
+    return ConnectionMultiplexer.Connect(options);
+});
 builder.Services.AddSingleton<IIdempotencyCache, RedisIdempotencyCache>();
 
 builder.Services.AddScoped<CurrentUserAccessor>();
