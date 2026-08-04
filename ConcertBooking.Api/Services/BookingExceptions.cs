@@ -29,3 +29,8 @@ public class InvalidBookingRequestException : Exception
 {
     public InvalidBookingRequestException(string message) : base(message) { }
 }
+
+public class ConcertNotFoundException : Exception
+{
+    public ConcertNotFoundException(Guid id) : base($"Concert {id} not found") { }
+}

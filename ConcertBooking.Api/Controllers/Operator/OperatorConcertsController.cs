@@ -1,4 +1,5 @@
 using ConcertBooking.Api.Domain;
+using ConcertBooking.Api.Dtos;
 using ConcertBooking.Api.Infrastructure;
 using ConcertBooking.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -23,4 +24,23 @@ public class OperatorConcertsController : ControllerBase
         var concert = await _operatorConcertService.GetConcertByIdAsync(id, ct);
         return concert is null ? NotFound() : Ok(concert);
     }
+
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateConcertRequest request, CancellationToken ct)
+    {
+        var concert = await _operatorConcertService.CreateConcertAsync(request, ct);
+        return CreatedAtAction(nameof(GetById), new { id = concert.Id }, concert);
+    }
+
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateConcertRequest request, CancellationToken ct)
+        => Ok(await _operatorConcertService.UpdateConcertAsync(id, request, ct));
+
+    [HttpPost("{id:guid}/ticket-categories")]
+    public async Task<IActionResult> AddTicketCategory(Guid id, [FromBody] AddTicketCategoryRequest request, CancellationToken ct)
+        => Ok(await _operatorConcertService.AddTicketCategoryAsync(id, request, ct));
+
+    [HttpPost("{id:guid}/publish")]
+    public async Task<IActionResult> Publish(Guid id, CancellationToken ct)
+        => Ok(await _operatorConcertService.PublishConcertAsync(id, ct));
 }

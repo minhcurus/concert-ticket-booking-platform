@@ -21,6 +21,7 @@ public class ExceptionHandlingMiddleware
                 InvalidVoucherException e => (StatusCodes.Status422UnprocessableEntity, e.Message),
                 TicketCategoryNotFoundException => (StatusCodes.Status404NotFound, "TICKET_CATEGORY_NOT_FOUND"),
                 BookingNotFoundException => (StatusCodes.Status404NotFound, "BOOKING_NOT_FOUND"),
+                ConcertNotFoundException => (StatusCodes.Status404NotFound, "CONCERT_NOT_FOUND"),
                 InvalidBookingStateException e => (StatusCodes.Status409Conflict, e.Message),
                 InvalidBookingRequestException e => (StatusCodes.Status400BadRequest, e.Message),
                 _ => (StatusCodes.Status500InternalServerError, "INTERNAL_ERROR"),
