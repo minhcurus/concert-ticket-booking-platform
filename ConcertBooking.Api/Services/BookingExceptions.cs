@@ -34,3 +34,13 @@ public class ConcertNotFoundException : Exception
 {
     public ConcertNotFoundException(Guid id) : base($"Concert {id} not found") { }
 }
+
+public class InvalidConcertRequestException : Exception
+{
+    public InvalidConcertRequestException(string message) : base(message) { }
+}
+
+public class ConcertNotPublishableException : Exception
+{
+    public ConcertNotPublishableException(string message) : base(message) { }
+}

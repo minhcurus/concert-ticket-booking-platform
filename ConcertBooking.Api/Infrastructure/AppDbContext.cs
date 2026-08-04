@@ -19,7 +19,11 @@ public class AppDbContext : DbContext
     {
         modelBuilder.Entity<TicketCategory>(e =>
         {
-            e.ToTable(t => t.HasCheckConstraint("CK_TicketCategory_AvailableQuantity", "\"AvailableQuantity\" >= 0"));
+            e.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_TicketCategory_AvailableQuantity", "\"AvailableQuantity\" >= 0");
+                t.HasCheckConstraint("CK_TicketCategory_Price", "\"Price\" >= 0");
+            });
             e.HasOne(c => c.Concert).WithMany(c => c.TicketCategories).HasForeignKey(c => c.ConcertId);
         });
 

@@ -151,6 +151,8 @@ namespace ConcertBooking.Api.Infrastructure.Migrations
                     b.ToTable("TicketCategories", t =>
                         {
                             t.HasCheckConstraint("CK_TicketCategory_AvailableQuantity", "\"AvailableQuantity\" >= 0");
+
+                            t.HasCheckConstraint("CK_TicketCategory_Price", "\"Price\" >= 0");
                         });
                 });
 

@@ -24,6 +24,8 @@ public class ExceptionHandlingMiddleware
                 ConcertNotFoundException => (StatusCodes.Status404NotFound, "CONCERT_NOT_FOUND"),
                 InvalidBookingStateException e => (StatusCodes.Status409Conflict, e.Message),
                 InvalidBookingRequestException e => (StatusCodes.Status400BadRequest, e.Message),
+                InvalidConcertRequestException e => (StatusCodes.Status400BadRequest, e.Message),
+                ConcertNotPublishableException e => (StatusCodes.Status409Conflict, e.Message),
                 _ => (StatusCodes.Status500InternalServerError, "INTERNAL_ERROR"),
             };
             context.Response.StatusCode = status;

@@ -27,6 +27,9 @@ public class OperatorConcertService : IOperatorConcertService
 
     public async Task<ConcertDetailDto> CreateConcertAsync(CreateConcertRequest request, CancellationToken ct)
     {
+        if (request.StartTime <= DateTimeOffset.UtcNow)
+            throw new InvalidConcertRequestException("StartTime must be in the future");
+
         var concert = new Concert
         {
             Id = Guid.NewGuid(),
@@ -46,6 +49,9 @@ public class OperatorConcertService : IOperatorConcertService
         var concert = await _db.Concerts.Include(c => c.TicketCategories).FirstOrDefaultAsync(c => c.Id == id, ct)
             ?? throw new ConcertNotFoundException(id);
 
+        if (request.StartTime <= DateTimeOffset.UtcNow)
+            throw new InvalidConcertRequestException("StartTime must be in the future");
+
         concert.Title = request.Title;
         concert.Description = request.Description;
         concert.VenueName = request.VenueName;
@@ -58,6 +64,11 @@ public class OperatorConcertService : IOperatorConcertService
     {
         var concert = await _db.Concerts.FirstOrDefaultAsync(c => c.Id == concertId, ct)
             ?? throw new ConcertNotFoundException(concertId);
+
+        if (request.Price < 0)
+            throw new InvalidConcertRequestException("Price must not be negative");
+        if (request.TotalQuantity <= 0)
+            throw new InvalidConcertRequestException("TotalQuantity must be positive");
 
         var category = new TicketCategory
         {
@@ -77,6 +88,9 @@ public class OperatorConcertService : IOperatorConcertService
     {
         var concert = await _db.Concerts.Include(c => c.TicketCategories).FirstOrDefaultAsync(c => c.Id == id, ct)
             ?? throw new ConcertNotFoundException(id);
+
+        if (concert.TicketCategories.Count == 0)
+            throw new ConcertNotPublishableException("Concert must have at least one ticket category before publishing");
 
         concert.Status = ConcertStatus.Published;
         await _db.SaveChangesAsync(ct);

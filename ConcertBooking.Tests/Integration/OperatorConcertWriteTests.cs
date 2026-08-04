@@ -54,4 +54,63 @@ public class OperatorConcertWriteTests
             new UpdateConcertRequest("T", "D", "V", DateTimeOffset.UtcNow));
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Create_PastStartTime_Returns400()
+    {
+        var response = await OperatorClient().PostAsJsonAsync("/api/operator/concerts",
+            new CreateConcertRequest("Past Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(-1)));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Update_PastStartTime_Returns400()
+    {
+        var client = OperatorClient();
+        var createResponse = await client.PostAsJsonAsync("/api/operator/concerts",
+            new CreateConcertRequest("Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(60)));
+        var created = await createResponse.Content.ReadFromJsonAsync<ConcertDetailDto>();
+
+        var updateResponse = await client.PutAsJsonAsync($"/api/operator/concerts/{created!.Id}",
+            new UpdateConcertRequest("Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(-1)));
+        Assert.Equal(HttpStatusCode.BadRequest, updateResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddTicketCategory_NegativePrice_Returns400()
+    {
+        var client = OperatorClient();
+        var createResponse = await client.PostAsJsonAsync("/api/operator/concerts",
+            new CreateConcertRequest("Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(60)));
+        var created = await createResponse.Content.ReadFromJsonAsync<ConcertDetailDto>();
+
+        var categoryResponse = await client.PostAsJsonAsync($"/api/operator/concerts/{created!.Id}/ticket-categories",
+            new AddTicketCategoryRequest("General", -10m, 200));
+        Assert.Equal(HttpStatusCode.BadRequest, categoryResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddTicketCategory_ZeroTotalQuantity_Returns400()
+    {
+        var client = OperatorClient();
+        var createResponse = await client.PostAsJsonAsync("/api/operator/concerts",
+            new CreateConcertRequest("Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(60)));
+        var created = await createResponse.Content.ReadFromJsonAsync<ConcertDetailDto>();
+
+        var categoryResponse = await client.PostAsJsonAsync($"/api/operator/concerts/{created!.Id}/ticket-categories",
+            new AddTicketCategoryRequest("General", 50m, 0));
+        Assert.Equal(HttpStatusCode.BadRequest, categoryResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Publish_WithNoTicketCategories_Returns409()
+    {
+        var client = OperatorClient();
+        var createResponse = await client.PostAsJsonAsync("/api/operator/concerts",
+            new CreateConcertRequest("Empty Show", "Desc", "Venue", DateTimeOffset.UtcNow.AddDays(60)));
+        var created = await createResponse.Content.ReadFromJsonAsync<ConcertDetailDto>();
+
+        var publishResponse = await client.PostAsync($"/api/operator/concerts/{created!.Id}/publish", null);
+        Assert.Equal(HttpStatusCode.Conflict, publishResponse.StatusCode);
+    }
 }
