@@ -1,0 +1,14 @@
+*.pdf
+
+bin/
+obj/
+out/
+
+.vs/
+.vscode/
+*.user
+
+.env
+.env.*
+
+*.log
