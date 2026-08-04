@@ -52,11 +52,18 @@ public class BookingConcurrencyTests
         Assert.Equal(concurrentRequests, successCount + soldOutCount);
         Assert.True(successCount * quantityPerRequest <= 10, $"Oversold: {successCount} bookings of {quantityPerRequest} tickets each exceeds 10 available");
 
+        // Requests serialize on the TicketCategory row lock, so allocation is deterministic
+        // and order-independent: 10 -> 7 -> 4 -> 1, then the remaining two requests cannot fit.
+        // Pinning this (rather than deriving the expectation from successCount) ensures the test
+        // fails if the booking path starts rejecting every request outright.
+        Assert.Equal(3, successCount);
+        Assert.Equal(2, soldOutCount);
+
         using var verifyScope = _factory.Services.CreateScope();
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
         var finalCategory = await verifyDb.TicketCategories.SingleAsync(c => c.Id == DbSeeder.VipCategoryId);
         Assert.True(finalCategory.AvailableQuantity >= 0);
-        Assert.Equal(10 - successCount * quantityPerRequest, finalCategory.AvailableQuantity);
+        Assert.Equal(1, finalCategory.AvailableQuantity);
     }
 
     [Fact]
