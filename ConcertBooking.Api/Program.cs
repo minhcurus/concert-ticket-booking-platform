@@ -19,6 +19,7 @@ builder.Services.AddSingleton<IIdempotencyCache, RedisIdempotencyCache>();
 builder.Services.AddScoped<CurrentUserAccessor>();
 builder.Services.AddScoped<ICatalogService, CatalogService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
+builder.Services.AddHostedService<HoldExpirySweepService>();
 
 var app = builder.Build();
 
