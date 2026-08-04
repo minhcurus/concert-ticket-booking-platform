@@ -124,4 +124,93 @@ public class BookingCreationTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Create_NegativeQuantity_Returns400AndDoesNotIncreaseStock()
+    {
+        var client = CustomerClient($"negative-qty-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, -5) }, null);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var before = (await db.TicketCategories.AsNoTracking().SingleAsync(c => c.Id == DbSeeder.StandardCategoryId)).AvailableQuantity;
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var after = (await db.TicketCategories.AsNoTracking().SingleAsync(c => c.Id == DbSeeder.StandardCategoryId)).AvailableQuantity;
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task Create_ZeroQuantity_Returns400()
+    {
+        var client = CustomerClient($"zero-qty-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 0) }, null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_EmptyItemsList_Returns400()
+    {
+        var client = CustomerClient($"empty-items-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(new List<CreateBookingItemRequest>(), null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_DuplicateTicketCategoryInRequest_Returns400()
+    {
+        var client = CustomerClient($"dup-category-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(
+            new List<CreateBookingItemRequest>
+            {
+                new(DbSeeder.StandardCategoryId, 1),
+                new(DbSeeder.StandardCategoryId, 1),
+            }, null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_SameIdempotencyKeyUsedByDifferentUser_Returns409AndDoesNotLeakOtherUsersBooking()
+    {
+        // Force a real DB-level unique-constraint collision on IdempotencyKey (bypassing the
+        // Redis fast-path, which is keyed the same way and would short-circuit before hitting
+        // the DB) by inserting a booking directly for a different user with a known key, then
+        // having DbSeeder.CustomerId attempt to create a booking using that same key.
+        var otherUserId = Guid.NewGuid();
+        var sharedKey = $"cross-user-{Guid.NewGuid()}";
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Users.Add(new User { Id = otherUserId, Name = "Other User", Email = $"{otherUserId}@example.com", Role = UserRole.Customer });
+            db.Bookings.Add(new Booking
+            {
+                Id = Guid.NewGuid(),
+                UserId = otherUserId,
+                ConcertId = DbSeeder.ConcertId,
+                Status = BookingStatus.PendingPayment,
+                IdempotencyKey = sharedKey,
+                HoldExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                TotalAmount = 90m,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var client = CustomerClient(sharedKey);
+        var request = new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 1) }, null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
 }

@@ -24,3 +24,8 @@ public class InvalidBookingStateException : Exception
 {
     public InvalidBookingStateException(string message) : base(message) { }
 }
+
+public class InvalidBookingRequestException : Exception
+{
+    public InvalidBookingRequestException(string message) : base(message) { }
+}
