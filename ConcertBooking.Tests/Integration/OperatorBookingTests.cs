@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using ConcertBooking.Api.Domain;
 using ConcertBooking.Api.Dtos;
 using ConcertBooking.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -65,6 +66,55 @@ public class OperatorBookingTests
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
         var after = (await verifyDb.TicketCategories.SingleAsync(c => c.Id == DbSeeder.StandardCategoryId)).AvailableQuantity;
         Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task OverrideStatus_ForceCancelThenReinstateVoucherBooking_RestoresRedemption()
+    {
+        // Uses a dedicated ad-hoc customer (rather than DbSeeder.CustomerId) so this test's
+        // "the voucher redemption slot is available to redeem" assumption doesn't collide with
+        // other tests in this collection against the shared, never-reset DB fixture — same
+        // pattern as BookingCancellationTests.Cancel_ReleasesVoucherRedemptionSlot.
+        var dedicatedUserId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Users.Add(new User { Id = dedicatedUserId, Name = "Override Voucher Test Customer", Email = $"{dedicatedUserId}@example.com", Role = UserRole.Customer });
+            await db.SaveChangesAsync();
+        }
+
+        HttpClient ClientFor(string idempotencyKey)
+        {
+            var client = _factory.CreateClient();
+            client.DefaultRequestHeaders.Add("X-User-Id", dedicatedUserId.ToString());
+            client.DefaultRequestHeaders.Add("Idempotency-Key", idempotencyKey);
+            return client;
+        }
+
+        var operatorClient = OperatorClient();
+
+        var createResponse = await ClientFor($"override-voucher-{Guid.NewGuid()}")
+            .PostAsJsonAsync("/api/bookings", new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 1) }, "LAUNCH10"));
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        var booking = await createResponse.Content.ReadFromJsonAsync<BookingDto>();
+
+        var cancelResponse = await operatorClient.PutAsJsonAsync($"/api/operator/bookings/{booking!.Id}/status", new UpdateBookingStatusRequest("Cancelled"));
+        Assert.Equal(HttpStatusCode.OK, cancelResponse.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var redemptionAfterCancel = await db.VoucherRedemptions.SingleOrDefaultAsync(r => r.BookingId == booking.Id);
+            Assert.Null(redemptionAfterCancel);
+        }
+
+        var reinstateResponse = await operatorClient.PutAsJsonAsync($"/api/operator/bookings/{booking.Id}/status", new UpdateBookingStatusRequest("PendingPayment"));
+        Assert.Equal(HttpStatusCode.OK, reinstateResponse.StatusCode);
+
+        using var verifyScope = _factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var redemptionAfterReinstate = await verifyDb.VoucherRedemptions.SingleOrDefaultAsync(r => r.BookingId == booking.Id);
+        Assert.NotNull(redemptionAfterReinstate);
     }
 
     [Fact]

@@ -158,7 +158,7 @@ public class BookingService : IBookingService
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
-        var booking = await LockBookingAsync(bookingId, userId, ct)
+        var booking = await BookingConcurrencyGuard.LockBookingAsync(_db, bookingId, userId, ct)
             ?? throw new BookingNotFoundException(bookingId);
 
         if (booking.Status != BookingStatus.PendingPayment)
@@ -176,13 +176,13 @@ public class BookingService : IBookingService
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
-        var booking = await LockBookingAsync(bookingId, userId, ct)
+        var booking = await BookingConcurrencyGuard.LockBookingAsync(_db, bookingId, userId, ct)
             ?? throw new BookingNotFoundException(bookingId);
 
         if (booking.Status != BookingStatus.PendingPayment)
             throw new InvalidBookingStateException($"Cannot cancel a booking in status {booking.Status}");
 
-        await ReleaseInventoryAndVoucherAsync(booking, ct);
+        await BookingConcurrencyGuard.ReleaseInventoryAndVoucherAsync(_db, booking, ct);
         booking.Status = BookingStatus.Cancelled;
 
         await _db.SaveChangesAsync(ct);
@@ -207,44 +207,16 @@ public class BookingService : IBookingService
             _db.ChangeTracker.Clear();
 
             await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-            var booking = await LockBookingAsync(bookingId, userId: null, ct);
+            var booking = await BookingConcurrencyGuard.LockBookingAsync(_db, bookingId, userId: null, ct);
             if (booking is null || booking.Status != BookingStatus.PendingPayment) continue;
 
-            await ReleaseInventoryAndVoucherAsync(booking, ct);
+            await BookingConcurrencyGuard.ReleaseInventoryAndVoucherAsync(_db, booking, ct);
             booking.Status = BookingStatus.Expired;
             await _db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
             expiredCount++;
         }
         return expiredCount;
-    }
-
-    /// <summary>
-    /// Locks the Booking row itself (SELECT ... FOR UPDATE) as the first thing done inside
-    /// the caller's transaction, before its Status is inspected or mutated. Without this,
-    /// concurrent status transitions on the same booking (e.g. a user's CancelBookingAsync
-    /// racing the stale-hold sweep's ExpireStaleHoldsAsync) can both read Status as
-    /// PendingPayment before either commits, and both release inventory for the same
-    /// booking, double-crediting AvailableQuantity.
-    /// </summary>
-    private async Task<Booking?> LockBookingAsync(Guid bookingId, Guid? userId, CancellationToken ct)
-    {
-        var booking = userId is Guid uid
-            ? await _db.Bookings
-                .FromSqlInterpolated($"SELECT * FROM \"Bookings\" WHERE \"Id\" = {bookingId} AND \"UserId\" = {uid} FOR UPDATE")
-                .SingleOrDefaultAsync(ct)
-            : await _db.Bookings
-                .FromSqlInterpolated($"SELECT * FROM \"Bookings\" WHERE \"Id\" = {bookingId} FOR UPDATE")
-                .SingleOrDefaultAsync(ct);
-
-        if (booking is not null)
-        {
-            // Relies on EF Core's change-tracker relationship fixup: loading the BookingItem
-            // rows for an already-tracked Booking automatically populates booking.Items,
-            // without needing to compose .Include() on top of the raw-SQL FOR UPDATE query.
-            await _db.BookingItems.Where(i => i.BookingId == booking.Id).LoadAsync(ct);
-        }
-        return booking;
     }
 
     private static void ValidateRequest(CreateBookingRequest request)
@@ -255,31 +227,6 @@ public class BookingService : IBookingService
             throw new InvalidBookingRequestException("Quantity must be greater than zero for every item");
         if (request.Items.Select(i => i.TicketCategoryId).Distinct().Count() != request.Items.Count)
             throw new InvalidBookingRequestException("Duplicate ticket category in booking request");
-    }
-
-    private async Task ReleaseInventoryAndVoucherAsync(Booking booking, CancellationToken ct)
-    {
-        // Lock ticket categories in the same globally-consistent, ID-sorted order used by
-        // CreateBookingAsync, so two concurrent releases (e.g. a cancel racing the sweep for
-        // different bookings that share categories) can never deadlock against each other.
-        foreach (var item in booking.Items.OrderBy(i => i.TicketCategoryId))
-        {
-            var category = await _db.TicketCategories
-                .FromSqlInterpolated($"SELECT * FROM \"TicketCategories\" WHERE \"Id\" = {item.TicketCategoryId} FOR UPDATE")
-                .SingleAsync(ct);
-            category.AvailableQuantity += item.Quantity;
-        }
-
-        if (booking.VoucherId is not null)
-        {
-            var voucher = await _db.Vouchers
-                .FromSqlInterpolated($"SELECT * FROM \"Vouchers\" WHERE \"Id\" = {booking.VoucherId} FOR UPDATE")
-                .SingleAsync(ct);
-            voucher.RedeemedCount -= 1;
-
-            var redemption = await _db.VoucherRedemptions.FirstOrDefaultAsync(r => r.BookingId == booking.Id, ct);
-            if (redemption is not null) _db.VoucherRedemptions.Remove(redemption);
-        }
     }
 
     private static bool IsIdempotencyKeyConflict(DbUpdateException ex) =>

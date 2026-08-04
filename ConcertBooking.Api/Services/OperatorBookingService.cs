@@ -25,7 +25,10 @@ public class OperatorBookingService : IOperatorBookingService
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
 
-        var booking = await _db.Bookings.Include(b => b.Items).FirstOrDefaultAsync(b => b.Id == bookingId, ct)
+        // Locks the Booking row before Status is inspected, exactly like the customer-facing
+        // confirm/cancel/expiry paths — without this, this override could race the hold-expiry
+        // sweep (or another override) and double-credit inventory for the same booking.
+        var booking = await BookingConcurrencyGuard.LockBookingAsync(_db, bookingId, userId: null, ct)
             ?? throw new BookingNotFoundException(bookingId);
 
         var wasReleasingStatus = booking.Status is BookingStatus.Cancelled or BookingStatus.Expired;
@@ -33,24 +36,11 @@ public class OperatorBookingService : IOperatorBookingService
 
         if (!wasReleasingStatus && isReleasingStatus)
         {
-            foreach (var item in booking.Items)
-            {
-                var category = await _db.TicketCategories
-                    .FromSqlInterpolated($"SELECT * FROM \"TicketCategories\" WHERE \"Id\" = {item.TicketCategoryId} FOR UPDATE")
-                    .SingleAsync(ct);
-                category.AvailableQuantity += item.Quantity;
-            }
+            await BookingConcurrencyGuard.ReleaseInventoryAndVoucherAsync(_db, booking, ct);
         }
         else if (wasReleasingStatus && !isReleasingStatus)
         {
-            foreach (var item in booking.Items)
-            {
-                var category = await _db.TicketCategories
-                    .FromSqlInterpolated($"SELECT * FROM \"TicketCategories\" WHERE \"Id\" = {item.TicketCategoryId} FOR UPDATE")
-                    .SingleAsync(ct);
-                if (category.AvailableQuantity < item.Quantity) throw new SoldOutException(item.TicketCategoryId);
-                category.AvailableQuantity -= item.Quantity;
-            }
+            await BookingConcurrencyGuard.ReserveInventoryAndVoucherAsync(_db, booking, ct);
         }
 
         booking.Status = newStatus;
