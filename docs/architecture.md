@@ -216,16 +216,8 @@ design, not auth infrastructure.
   one `Booking` row. This is a direct, executable proof of the core concern
   (overselling/duplicates), stronger than a written explanation alone.
 
-## Out of scope / explicit limitations
+## Scope, assumptions & limitations
 
-- No real authentication (no passwords/JWT) — header-based fake identity only.
-- No real payment gateway — a single endpoint simulates success.
-- No voucher CRUD APIs — seed data only (a deliberate scope cut).
-- No refunds after `Confirmed`.
-- No seat-level/assigned seating — category + quantity only.
-- No notifications/email.
-- Rate limiting is in-memory/per-instance, not distributed.
-- No pagination cursoring — simple offset/limit.
-- Operators cannot delete concerts or ticket categories (create/update/publish only) —
-  deleting live inventory is a business decision this system doesn't attempt to adjudicate.
+What's assumed, what's built, and what's deliberately out of scope is tracked separately in
+[`docs/ASSUMPTIONS.md`](ASSUMPTIONS.md) rather than duplicated here.
 

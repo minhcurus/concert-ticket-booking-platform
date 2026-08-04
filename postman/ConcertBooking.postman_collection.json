@@ -1,0 +1,581 @@
+{
+  "info": {
+    "name": "Concert Ticket Booking API",
+    "description": "Covers the full Customer flow (Browse -> Book -> Confirm/Cancel) and Operator flow (Publish -> Monitor -> Override) against a locally running instance. Import the companion `ConcertBooking.postman_environment.json` and select it before running — all IDs referenced here match the app's seeded data (see ConcertBooking.Api/Infrastructure/DbSeeder.cs). Run requests top-to-bottom within each folder: several requests capture an ID into an environment variable that a later request depends on.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Customer Flow (Browse -> Book -> Confirm/Cancel)",
+      "item": [
+        {
+          "name": "1.1 List Published Concerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/concerts?page=1&pageSize=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "concerts"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "pageSize", "value": "20" }
+              ]
+            },
+            "description": "Only Published concerts are visible here. Expect the seeded 'Flash Sale Live' concert."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('includes seeded concert', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.some(c => c.id === pm.environment.get('concertId'))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Get Concert Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/concerts/{{concertId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "concerts", "{{concertId}}"]
+            },
+            "description": "Returns ticket categories with live AvailableQuantity (VIP $250, Standard $90)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('has 2 ticket categories', () => {",
+                  "  pm.expect(pm.response.json().ticketCategories).to.have.lengthOf(2);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Create Booking (Standard, no voucher)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"ticketCategoryId\": \"{{standardCategoryId}}\", \"quantity\": 2 }\n  ],\n  \"voucherCode\": null\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings"]
+            },
+            "description": "Idempotency-Key is required. Re-sending this exact request (same key) returns the SAME booking with 200 OK instead of creating a duplicate — try re-running this request a second time without changing the Idempotency-Key header to see that behavior."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created (or 200 on replay)', () => {",
+                  "  pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "pm.test('status is PendingPayment', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('PendingPayment');",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('bookingId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 Create Booking (with voucher LAUNCH10)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{secondCustomerId}}" },
+              { "key": "Idempotency-Key", "value": "{{$guid}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"ticketCategoryId\": \"{{standardCategoryId}}\", \"quantity\": 1 }\n  ],\n  \"voucherCode\": \"{{voucherCode}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings"]
+            },
+            "description": "Uses secondCustomerId (Carol) rather than customerId so this voucher redemption doesn't collide with any earlier run under the same user (LAUNCH10 is one-time-per-user). Expect totalAmount = 81 (90 - 10%)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('10% discount applied', () => {",
+                  "  pm.expect(pm.response.json().totalAmount).to.eql(81);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('voucherBookingId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 Get My Bookings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('only own bookings returned', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.every(b => b.userId === pm.environment.get('customerId'))).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 Get Booking By Id",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings", "{{bookingId}}"]
+            },
+            "description": "Uses the bookingId captured by 1.3. Run 1.3 first if this returns 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.7 Confirm Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/confirm-payment",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings", "{{bookingId}}", "confirm-payment"]
+            },
+            "description": "Simulated payment success. PendingPayment -> Confirmed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is Confirmed', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('Confirmed');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.8 Cancel Booking (voucher booking)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{secondCustomerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/{{voucherBookingId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings", "{{voucherBookingId}}", "cancel"]
+            },
+            "description": "Cancels the still-PendingPayment voucher booking from 1.4 (not the one confirmed in 1.7, which can no longer be cancelled by the customer). Releases inventory and the voucher redemption slot together."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is Cancelled', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('Cancelled');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.9 Cancel Already-Confirmed Booking -> expect 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/bookings/{{bookingId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bookings", "{{bookingId}}", "cancel"]
+            },
+            "description": "Negative-path check: the booking from 1.3 is already Confirmed after 1.7, so cancelling it must be rejected."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Operator Flow (Publish -> Monitor -> Override)",
+      "item": [
+        {
+          "name": "2.1 List All Concerts (incl. Draft)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts"]
+            },
+            "description": "Unlike GET /api/concerts, this also returns Draft/Cancelled concerts. Optionally filter with ?status=Draft."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Customer Role Hits Operator Endpoint -> expect 403",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{customerId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts"]
+            },
+            "description": "Negative-path check: role gating must reject a Customer identity on an Operator-only route."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Create Concert (Draft)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Postman Test Show\",\n  \"description\": \"Created from the Operator Flow collection\",\n  \"venueName\": \"Test Arena\",\n  \"startTime\": \"2027-01-01T20:00:00Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts"]
+            },
+            "description": "startTime must be in the future — a past date is rejected with 400. New concerts start as Draft and are invisible on the customer catalog until published (2.6)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('status is Draft', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('Draft');",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('operatorConcertId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 Update Concert",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Postman Test Show (Renamed)\",\n  \"description\": \"Updated from the Operator Flow collection\",\n  \"venueName\": \"Test Arena — Main Hall\",\n  \"startTime\": \"2027-01-01T20:00:00Z\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts/{{operatorConcertId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts", "{{operatorConcertId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Add Ticket Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"General Admission\",\n  \"price\": 45.00,\n  \"totalQuantity\": 100\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts/{{operatorConcertId}}/ticket-categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts", "{{operatorConcertId}}", "ticket-categories"]
+            },
+            "description": "A concert cannot be published (2.6) with zero ticket categories, so this must run before that."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.environment.set('operatorTicketCategoryId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.6 Publish Concert",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/concerts/{{operatorConcertId}}/publish",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "concerts", "{{operatorConcertId}}", "publish"]
+            },
+            "description": "Draft -> Published. After this, the concert also appears in GET /api/concerts (1.1)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is Published', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('Published');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.7 Monitor Bookings (filter by flagged)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/bookings?isFlagged=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "bookings"],
+              "query": [
+                { "key": "isFlagged", "value": "false" }
+              ]
+            },
+            "description": "Also supports ?status= and ?concertId= filters."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.8 Flag Booking as Suspicious",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Flagged via Postman Operator Flow demo\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/bookings/{{bookingId}}/flag",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "bookings", "{{bookingId}}", "flag"]
+            },
+            "description": "IsFlagged is orthogonal to Status — flagging a Confirmed booking doesn't change its lifecycle state."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('isFlagged is true', () => {",
+                  "  pm.expect(pm.response.json().isFlagged).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.9 Override Booking Status (force-cancel)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "X-User-Id", "value": "{{operatorId}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Cancelled\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/operator/bookings/{{bookingId}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "operator", "bookings", "{{bookingId}}", "status"]
+            },
+            "description": "The operator escape hatch: bypasses the normal customer-facing state machine (a customer can't cancel a Confirmed booking — see 1.9 — but an operator can force it). Releases inventory the same way a customer cancel does. Valid Status values: PendingPayment, Confirmed, Cancelled, Expired."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status is Cancelled', () => {",
+                  "  pm.expect(pm.response.json().status).to.eql('Cancelled');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
