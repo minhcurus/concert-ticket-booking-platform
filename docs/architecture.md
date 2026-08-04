@@ -228,3 +228,4 @@ design, not auth infrastructure.
 - No pagination cursoring — simple offset/limit.
 - Operators cannot delete concerts or ticket categories (create/update/publish only) —
   deleting live inventory is a business decision this system doesn't attempt to adjudicate.
+
