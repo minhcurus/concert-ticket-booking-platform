@@ -18,8 +18,11 @@ builder.Services.AddSingleton<IIdempotencyCache, RedisIdempotencyCache>();
 
 builder.Services.AddScoped<CurrentUserAccessor>();
 builder.Services.AddScoped<ICatalogService, CatalogService>();
+builder.Services.AddScoped<IBookingService, BookingService>();
 
 var app = builder.Build();
+
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {

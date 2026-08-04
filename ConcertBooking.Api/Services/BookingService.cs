@@ -1,0 +1,233 @@
+using ConcertBooking.Api.Domain;
+using ConcertBooking.Api.Dtos;
+using ConcertBooking.Api.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+
+namespace ConcertBooking.Api.Services;
+
+public class BookingService : IBookingService
+{
+    private readonly AppDbContext _db;
+    private readonly IIdempotencyCache _idempotencyCache;
+
+    public BookingService(AppDbContext db, IIdempotencyCache idempotencyCache)
+    {
+        _db = db;
+        _idempotencyCache = idempotencyCache;
+    }
+
+    public async Task<BookingResult> CreateBookingAsync(Guid userId, CreateBookingRequest request, string idempotencyKey, CancellationToken ct)
+    {
+        var cachedBookingId = await _idempotencyCache.TryGetAsync(idempotencyKey, ct);
+        if (cachedBookingId is not null)
+        {
+            var cached = await GetBookingByIdAsync(userId, cachedBookingId.Value, ct);
+            if (cached is not null) return new BookingResult(cached, true);
+        }
+
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+        var categoryIds = request.Items.Select(i => i.TicketCategoryId).Distinct().OrderBy(id => id).ToList();
+        var itemsByCategory = request.Items.ToDictionary(i => i.TicketCategoryId, i => i.Quantity);
+        var categories = new List<TicketCategory>();
+
+        foreach (var categoryId in categoryIds)
+        {
+            var category = await _db.TicketCategories
+                .FromSqlInterpolated($"SELECT * FROM \"TicketCategories\" WHERE \"Id\" = {categoryId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+            if (category is null) throw new TicketCategoryNotFoundException(categoryId);
+            categories.Add(category);
+        }
+
+        foreach (var category in categories)
+        {
+            var requested = itemsByCategory[category.Id];
+            if (category.AvailableQuantity < requested) throw new SoldOutException(category.Id);
+            category.AvailableQuantity -= requested;
+        }
+
+        var totalAmount = categories.Sum(c => c.Price * itemsByCategory[c.Id]);
+        Guid? voucherId = null;
+        VoucherRedemption? redemption = null;
+
+        if (!string.IsNullOrWhiteSpace(request.VoucherCode))
+        {
+            var voucher = await _db.Vouchers
+                .FromSqlInterpolated($"SELECT * FROM \"Vouchers\" WHERE \"Code\" = {request.VoucherCode} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+            if (voucher is null) throw new InvalidVoucherException("Voucher not found");
+
+            var now = DateTimeOffset.UtcNow;
+            if (now < voucher.ValidFrom || now > voucher.ValidTo)
+                throw new InvalidVoucherException("Voucher not currently valid");
+            if (voucher.RedeemedCount >= voucher.MaxRedemptions)
+                throw new InvalidVoucherException("Voucher fully redeemed");
+            if (voucher.ConcertId is not null && voucher.ConcertId != categories[0].ConcertId)
+                throw new InvalidVoucherException("Voucher not valid for this concert");
+
+            var alreadyRedeemed = await _db.VoucherRedemptions
+                .AnyAsync(r => r.VoucherId == voucher.Id && r.UserId == userId, ct);
+            if (alreadyRedeemed) throw new InvalidVoucherException("Voucher already redeemed by this user");
+
+            totalAmount = VoucherDiscountCalculator.Apply(totalAmount, voucher.DiscountType, voucher.DiscountValue);
+            voucher.RedeemedCount += 1;
+            voucherId = voucher.Id;
+
+            redemption = new VoucherRedemption { Id = Guid.NewGuid(), VoucherId = voucher.Id, UserId = userId };
+            _db.VoucherRedemptions.Add(redemption);
+        }
+
+        var booking = new Booking
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            ConcertId = categories[0].ConcertId,
+            Status = BookingStatus.PendingPayment,
+            IdempotencyKey = idempotencyKey,
+            HoldExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+            TotalAmount = totalAmount,
+            VoucherId = voucherId,
+        };
+
+        foreach (var category in categories)
+        {
+            booking.Items.Add(new BookingItem
+            {
+                Id = Guid.NewGuid(),
+                BookingId = booking.Id,
+                TicketCategoryId = category.Id,
+                Quantity = itemsByCategory[category.Id],
+                UnitPrice = category.Price,
+            });
+        }
+
+        if (redemption is not null) redemption.BookingId = booking.Id;
+        _db.Bookings.Add(booking);
+
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsIdempotencyKeyConflict(ex))
+        {
+            await transaction.RollbackAsync(ct);
+            var existing = await _db.Bookings.AsNoTracking()
+                .Include(b => b.Items)
+                .FirstOrDefaultAsync(b => b.IdempotencyKey == idempotencyKey, ct);
+            if (existing is null) throw;
+            return new BookingResult(BookingMapper.ToDto(existing), true);
+        }
+
+        await _idempotencyCache.SetAsync(idempotencyKey, booking.Id, TimeSpan.FromMinutes(15), ct);
+
+        var dto = await GetBookingByIdAsync(userId, booking.Id, ct)
+            ?? throw new InvalidOperationException("Booking vanished immediately after commit");
+        return new BookingResult(dto, false);
+    }
+
+    public async Task<BookingDto?> GetBookingByIdAsync(Guid userId, Guid bookingId, CancellationToken ct)
+    {
+        var booking = await _db.Bookings.AsNoTracking()
+            .Include(b => b.Items)
+            .FirstOrDefaultAsync(b => b.Id == bookingId && b.UserId == userId, ct);
+        return booking is null ? null : BookingMapper.ToDto(booking);
+    }
+
+    public async Task<IReadOnlyList<BookingDto>> GetUserBookingsAsync(Guid userId, CancellationToken ct)
+    {
+        var bookings = await _db.Bookings.AsNoTracking()
+            .Include(b => b.Items)
+            .Where(b => b.UserId == userId)
+            .OrderByDescending(b => b.CreatedAt)
+            .ToListAsync(ct);
+        return bookings.Select(BookingMapper.ToDto).ToList();
+    }
+
+    public async Task<BookingDto> ConfirmPaymentAsync(Guid userId, Guid bookingId, CancellationToken ct)
+    {
+        var booking = await _db.Bookings.Include(b => b.Items)
+            .FirstOrDefaultAsync(b => b.Id == bookingId && b.UserId == userId, ct)
+            ?? throw new BookingNotFoundException(bookingId);
+
+        if (booking.Status != BookingStatus.PendingPayment)
+            throw new InvalidBookingStateException($"Cannot confirm payment for a booking in status {booking.Status}");
+        if (booking.HoldExpiresAt < DateTimeOffset.UtcNow)
+            throw new InvalidBookingStateException("Booking hold has expired");
+
+        booking.Status = BookingStatus.Confirmed;
+        await _db.SaveChangesAsync(ct);
+        return BookingMapper.ToDto(booking);
+    }
+
+    public async Task<BookingDto> CancelBookingAsync(Guid userId, Guid bookingId, CancellationToken ct)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+
+        var booking = await _db.Bookings.Include(b => b.Items)
+            .FirstOrDefaultAsync(b => b.Id == bookingId && b.UserId == userId, ct)
+            ?? throw new BookingNotFoundException(bookingId);
+
+        if (booking.Status != BookingStatus.PendingPayment)
+            throw new InvalidBookingStateException($"Cannot cancel a booking in status {booking.Status}");
+
+        await ReleaseInventoryAndVoucherAsync(booking, ct);
+        booking.Status = BookingStatus.Cancelled;
+
+        await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return BookingMapper.ToDto(booking);
+    }
+
+    public async Task<int> ExpireStaleHoldsAsync(CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var staleIds = await _db.Bookings
+            .Where(b => b.Status == BookingStatus.PendingPayment && b.HoldExpiresAt < now)
+            .Select(b => b.Id)
+            .ToListAsync(ct);
+
+        var expiredCount = 0;
+        foreach (var bookingId in staleIds)
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+            var booking = await _db.Bookings.Include(b => b.Items).FirstOrDefaultAsync(b => b.Id == bookingId, ct);
+            if (booking is null || booking.Status != BookingStatus.PendingPayment) continue;
+
+            await ReleaseInventoryAndVoucherAsync(booking, ct);
+            booking.Status = BookingStatus.Expired;
+            await _db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+            expiredCount++;
+        }
+        return expiredCount;
+    }
+
+    private async Task ReleaseInventoryAndVoucherAsync(Booking booking, CancellationToken ct)
+    {
+        foreach (var item in booking.Items)
+        {
+            var category = await _db.TicketCategories
+                .FromSqlInterpolated($"SELECT * FROM \"TicketCategories\" WHERE \"Id\" = {item.TicketCategoryId} FOR UPDATE")
+                .SingleAsync(ct);
+            category.AvailableQuantity += item.Quantity;
+        }
+
+        if (booking.VoucherId is not null)
+        {
+            var voucher = await _db.Vouchers
+                .FromSqlInterpolated($"SELECT * FROM \"Vouchers\" WHERE \"Id\" = {booking.VoucherId} FOR UPDATE")
+                .SingleAsync(ct);
+            voucher.RedeemedCount -= 1;
+
+            var redemption = await _db.VoucherRedemptions.FirstOrDefaultAsync(r => r.BookingId == booking.Id, ct);
+            if (redemption is not null) _db.VoucherRedemptions.Remove(redemption);
+        }
+    }
+
+    private static bool IsIdempotencyKeyConflict(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } pgEx &&
+        pgEx.ConstraintName == "IX_Bookings_IdempotencyKey";
+}
