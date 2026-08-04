@@ -20,6 +20,7 @@ builder.Services.AddScoped<CurrentUserAccessor>();
 builder.Services.AddScoped<ICatalogService, CatalogService>();
 builder.Services.AddScoped<IBookingService, BookingService>();
 builder.Services.AddScoped<IOperatorConcertService, OperatorConcertService>();
+builder.Services.AddScoped<IOperatorBookingService, OperatorBookingService>();
 builder.Services.AddHostedService<HoldExpirySweepService>();
 
 builder.Services.AddRateLimiter(options =>
