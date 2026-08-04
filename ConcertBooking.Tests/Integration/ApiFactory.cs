@@ -23,6 +23,11 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
             {
                 ["ConnectionStrings:Postgres"] = _postgres.GetConnectionString(),
                 ["ConnectionStrings:Redis"] = _redis.GetConnectionString(),
+                // The shared fixture runs dozens of booking-creation requests as the same
+                // seeded users across the whole suite in well under a minute, which would
+                // otherwise trip the production 10/min limit. RateLimitingTests restores the
+                // real limit via WithWebHostBuilder to still prove throttling works.
+                ["RateLimiting:Booking:PermitLimit"] = "100000",
             });
         });
     }

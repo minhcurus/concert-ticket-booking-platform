@@ -26,9 +26,13 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("booking", context =>
         System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
             context.Request.Headers["X-User-Id"].ToString(),
+            // Read lazily (per partition, i.e. per distinct caller) rather than once at
+            // startup: WebApplicationFactory layers test-host configuration overrides onto
+            // the builder right before Build() completes, so an eager read here would miss
+            // them and always see the production default.
             _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
             {
-                PermitLimit = 10,
+                PermitLimit = builder.Configuration.GetValue("RateLimiting:Booking:PermitLimit", 10),
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
