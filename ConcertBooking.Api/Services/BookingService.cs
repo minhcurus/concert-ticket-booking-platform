@@ -43,6 +43,22 @@ public class BookingService : IBookingService
             categories.Add(category);
         }
 
+        // All items must belong to a single, published concert. Without this, a basket mixing
+        // categories from two concerts stores an arbitrary one as Booking.ConcertId (silently
+        // hiding the other from operator concertId filters), and a voucher scoped to "concert A"
+        // could be satisfied by a single cheap item from A while the rest of the basket is B's
+        // tickets. A Draft/unpublished concert's categories must also not be bookable by ID even
+        // though the customer catalog already hides them from browsing.
+        var concertIds = categories.Select(c => c.ConcertId).Distinct().ToList();
+        if (concertIds.Count > 1)
+            throw new InvalidBookingRequestException("All items in a booking must belong to the same concert");
+
+        var concertId = concertIds[0];
+        var concert = await _db.Concerts.FirstOrDefaultAsync(c => c.Id == concertId, ct)
+            ?? throw new ConcertNotFoundException(concertId);
+        if (concert.Status != ConcertStatus.Published)
+            throw new InvalidBookingRequestException("Cannot book tickets for a concert that is not published");
+
         foreach (var category in categories)
         {
             var requested = itemsByCategory[category.Id];
@@ -61,17 +77,7 @@ public class BookingService : IBookingService
                 .SingleOrDefaultAsync(ct);
             if (voucher is null) throw new InvalidVoucherException("Voucher not found");
 
-            var now = DateTimeOffset.UtcNow;
-            if (now < voucher.ValidFrom || now > voucher.ValidTo)
-                throw new InvalidVoucherException("Voucher not currently valid");
-            if (voucher.RedeemedCount >= voucher.MaxRedemptions)
-                throw new InvalidVoucherException("Voucher fully redeemed");
-            if (voucher.ConcertId is not null && voucher.ConcertId != categories[0].ConcertId)
-                throw new InvalidVoucherException("Voucher not valid for this concert");
-
-            var alreadyRedeemed = await _db.VoucherRedemptions
-                .AnyAsync(r => r.VoucherId == voucher.Id && r.UserId == userId, ct);
-            if (alreadyRedeemed) throw new InvalidVoucherException("Voucher already redeemed by this user");
+            await BookingConcurrencyGuard.ValidateVoucherForRedemptionAsync(_db, voucher, userId, concertId, ct);
 
             totalAmount = VoucherDiscountCalculator.Apply(totalAmount, voucher.DiscountType, voucher.DiscountValue);
             voucher.RedeemedCount += 1;
@@ -85,7 +91,7 @@ public class BookingService : IBookingService
         {
             Id = Guid.NewGuid(),
             UserId = userId,
-            ConcertId = categories[0].ConcertId,
+            ConcertId = concertId,
             Status = BookingStatus.PendingPayment,
             IdempotencyKey = idempotencyKey,
             HoldExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),

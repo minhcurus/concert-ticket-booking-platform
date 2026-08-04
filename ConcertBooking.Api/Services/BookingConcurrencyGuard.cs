@@ -94,8 +94,8 @@ internal static class BookingConcurrencyGuard
             var voucher = await db.Vouchers
                 .FromSqlInterpolated($"SELECT * FROM \"Vouchers\" WHERE \"Id\" = {booking.VoucherId} FOR UPDATE")
                 .SingleAsync(ct);
-            if (voucher.RedeemedCount >= voucher.MaxRedemptions)
-                throw new InvalidVoucherException("Voucher fully redeemed");
+
+            await ValidateVoucherForRedemptionAsync(db, voucher, booking.UserId, booking.ConcertId, ct);
 
             voucher.RedeemedCount += 1;
             db.VoucherRedemptions.Add(new VoucherRedemption
@@ -106,5 +106,27 @@ internal static class BookingConcurrencyGuard
                 BookingId = booking.Id,
             });
         }
+    }
+
+    /// <summary>
+    /// The full set of checks a voucher must pass before a redemption can be created for it —
+    /// shared by BookingService.CreateBookingAsync's forward path and
+    /// <see cref="ReserveInventoryAndVoucherAsync"/>'s reinstate path, so the two can never
+    /// silently drift apart on which checks they enforce. Assumes the caller has already locked
+    /// the voucher row (SELECT ... FOR UPDATE).
+    /// </summary>
+    public static async Task ValidateVoucherForRedemptionAsync(AppDbContext db, Voucher voucher, Guid userId, Guid concertId, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (now < voucher.ValidFrom || now > voucher.ValidTo)
+            throw new InvalidVoucherException("Voucher not currently valid");
+        if (voucher.RedeemedCount >= voucher.MaxRedemptions)
+            throw new InvalidVoucherException("Voucher fully redeemed");
+        if (voucher.ConcertId is not null && voucher.ConcertId != concertId)
+            throw new InvalidVoucherException("Voucher not valid for this concert");
+
+        var alreadyRedeemed = await db.VoucherRedemptions
+            .AnyAsync(r => r.VoucherId == voucher.Id && r.UserId == userId, ct);
+        if (alreadyRedeemed) throw new InvalidVoucherException("Voucher already redeemed by this user");
     }
 }

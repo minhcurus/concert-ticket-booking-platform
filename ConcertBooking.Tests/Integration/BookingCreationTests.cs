@@ -213,4 +213,83 @@ public class BookingCreationTests
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Create_ItemsSpanningTwoConcerts_Returns400()
+    {
+        var otherConcertId = Guid.NewGuid();
+        var otherCategoryId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Concerts.Add(new Concert
+            {
+                Id = otherConcertId,
+                Title = "Other Concert",
+                Description = "D",
+                VenueName = "V",
+                StartTime = DateTimeOffset.UtcNow.AddDays(30),
+                Status = ConcertStatus.Published,
+            });
+            db.TicketCategories.Add(new TicketCategory
+            {
+                Id = otherCategoryId,
+                ConcertId = otherConcertId,
+                Name = "General",
+                Price = 20m,
+                TotalQuantity = 50,
+                AvailableQuantity = 50,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var client = CustomerClient($"cross-concert-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(
+            new List<CreateBookingItemRequest>
+            {
+                new(DbSeeder.StandardCategoryId, 1),
+                new(otherCategoryId, 1),
+            }, null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_ForUnpublishedConcert_Returns400()
+    {
+        var draftConcertId = Guid.NewGuid();
+        var draftCategoryId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.Concerts.Add(new Concert
+            {
+                Id = draftConcertId,
+                Title = "Unpublished Show",
+                Description = "D",
+                VenueName = "V",
+                StartTime = DateTimeOffset.UtcNow.AddDays(30),
+                Status = ConcertStatus.Draft,
+            });
+            db.TicketCategories.Add(new TicketCategory
+            {
+                Id = draftCategoryId,
+                ConcertId = draftConcertId,
+                Name = "General",
+                Price = 20m,
+                TotalQuantity = 50,
+                AvailableQuantity = 50,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var client = CustomerClient($"draft-concert-{Guid.NewGuid()}");
+        var request = new CreateBookingRequest(new List<CreateBookingItemRequest> { new(draftCategoryId, 1) }, null);
+
+        var response = await client.PostAsJsonAsync("/api/bookings", request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
 }

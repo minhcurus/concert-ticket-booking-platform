@@ -3,6 +3,7 @@ using ConcertBooking.Api.Domain;
 using ConcertBooking.Api.Dtos;
 using ConcertBooking.Api.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace ConcertBooking.Api.Services;
@@ -13,21 +14,32 @@ public class CatalogService : ICatalogService
 
     private readonly AppDbContext _db;
     private readonly IConnectionMultiplexer _redis;
+    private readonly ILogger<CatalogService> _logger;
 
-    public CatalogService(AppDbContext db, IConnectionMultiplexer redis)
+    public CatalogService(AppDbContext db, IConnectionMultiplexer redis, ILogger<CatalogService> logger)
     {
         _db = db;
         _redis = redis;
+        _logger = logger;
     }
 
+    // The Redis cache here is a read-through performance optimization only — Postgres is
+    // always the source of truth. A Redis fault must degrade to querying the DB directly,
+    // not fail the request.
     public async Task<IReadOnlyList<ConcertSummaryDto>> GetPublishedConcertsAsync(int page, int pageSize, CancellationToken ct)
     {
-        var redisDb = _redis.GetDatabase();
         var cacheKey = $"catalog:concerts:page:{page}:size:{pageSize}";
 
-        var cached = await redisDb.StringGetAsync(cacheKey);
-        if (!cached.IsNullOrEmpty)
-            return JsonSerializer.Deserialize<List<ConcertSummaryDto>>((string)cached!)!;
+        try
+        {
+            var cached = await _redis.GetDatabase().StringGetAsync(cacheKey);
+            if (!cached.IsNullOrEmpty)
+                return JsonSerializer.Deserialize<List<ConcertSummaryDto>>((string)cached!)!;
+        }
+        catch (RedisException ex)
+        {
+            _logger.LogWarning(ex, "Catalog cache read failed, falling through to Postgres");
+        }
 
         var concerts = await _db.Concerts
             .Where(c => c.Status == ConcertStatus.Published)
@@ -37,7 +49,15 @@ public class CatalogService : ICatalogService
             .Select(c => new ConcertSummaryDto(c.Id, c.Title, c.VenueName, c.StartTime))
             .ToListAsync(ct);
 
-        await redisDb.StringSetAsync(cacheKey, JsonSerializer.Serialize(concerts), ListCacheTtl);
+        try
+        {
+            await _redis.GetDatabase().StringSetAsync(cacheKey, JsonSerializer.Serialize(concerts), ListCacheTtl);
+        }
+        catch (RedisException ex)
+        {
+            _logger.LogWarning(ex, "Catalog cache write failed; serving uncached result");
+        }
+
         return concerts;
     }
 

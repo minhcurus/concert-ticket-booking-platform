@@ -43,4 +43,16 @@ public class ConcertsControllerTests
         var response = await CustomerClient().GetAsync($"/api/concerts/{Guid.NewGuid()}");
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    [Theory]
+    [InlineData(0, 20)]
+    [InlineData(-1, 20)]
+    [InlineData(1, 0)]
+    [InlineData(1, -5)]
+    [InlineData(1, 101)]
+    public async Task List_InvalidPagingParameters_Returns400(int page, int pageSize)
+    {
+        var response = await CustomerClient().GetAsync($"/api/concerts?page={page}&pageSize={pageSize}");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
 }

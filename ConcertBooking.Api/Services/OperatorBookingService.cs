@@ -41,6 +41,12 @@ public class OperatorBookingService : IOperatorBookingService
         else if (wasReleasingStatus && !isReleasingStatus)
         {
             await BookingConcurrencyGuard.ReserveInventoryAndVoucherAsync(_db, booking, ct);
+
+            // A booking reaching Cancelled/Expired always has a HoldExpiresAt in the past.
+            // Without refreshing it here, the very next sweep tick would immediately re-expire
+            // the booking this override just reinstated, silently undoing it within ~30s.
+            if (newStatus == BookingStatus.PendingPayment)
+                booking.HoldExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10);
         }
 
         booking.Status = newStatus;
