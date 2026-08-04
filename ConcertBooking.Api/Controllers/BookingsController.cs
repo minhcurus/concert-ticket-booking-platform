@@ -3,6 +3,7 @@ using ConcertBooking.Api.Dtos;
 using ConcertBooking.Api.Infrastructure;
 using ConcertBooking.Api.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace ConcertBooking.Api.Controllers;
 
@@ -21,6 +22,7 @@ public class BookingsController : ControllerBase
     }
 
     [HttpPost]
+    [EnableRateLimiting("booking")]
     public async Task<ActionResult<BookingDto>> Create(
         [FromBody] CreateBookingRequest request,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
