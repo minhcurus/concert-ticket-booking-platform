@@ -1,6 +1,7 @@
 using ConcertBooking.Api.Infrastructure;
 using ConcertBooking.Api.Services;
 using Microsoft.EntityFrameworkCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +11,10 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
+
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString("Redis")!));
+builder.Services.AddSingleton<IIdempotencyCache, RedisIdempotencyCache>();
 
 builder.Services.AddScoped<CurrentUserAccessor>();
 builder.Services.AddScoped<ICatalogService, CatalogService>();
