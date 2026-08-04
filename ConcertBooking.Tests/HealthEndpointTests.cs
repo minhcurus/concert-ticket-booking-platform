@@ -1,14 +1,15 @@
 using System.Net;
-using Microsoft.AspNetCore.Mvc.Testing;
+using ConcertBooking.Tests.Integration;
 using Xunit;
 
 namespace ConcertBooking.Tests;
 
-public class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+[Collection("Api")]
+public class HealthEndpointTests
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly ApiFactory _factory;
 
-    public HealthEndpointTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public HealthEndpointTests(ApiFactory factory) => _factory = factory;
 
     [Fact]
     public async Task Health_ReturnsOk()

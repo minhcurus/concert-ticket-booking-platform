@@ -34,6 +34,7 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await db.Database.MigrateAsync();
+        await DbSeeder.SeedAsync(db);
     }
 
     async Task IAsyncLifetime.DisposeAsync()
