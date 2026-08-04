@@ -47,6 +47,13 @@ public class BookingRetrievalTests
     [Fact]
     public async Task GetMine_OnlyReturnsCallersBookings()
     {
+        // Seed a booking under a different user within this test so the isolation proof
+        // is self-contained and doesn't rely on other tests in the shared collection
+        // having already created a CustomerId booking.
+        var otherUsersBookingResponse = await ClientFor(DbSeeder.CustomerId, $"mine-other-{Guid.NewGuid()}")
+            .PostAsJsonAsync("/api/bookings", new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 1) }, null));
+        var otherUsersBooking = await otherUsersBookingResponse.Content.ReadFromJsonAsync<BookingDto>();
+
         await ClientFor(DbSeeder.SecondCustomerId, $"mine-{Guid.NewGuid()}")
             .PostAsJsonAsync("/api/bookings", new CreateBookingRequest(new List<CreateBookingItemRequest> { new(DbSeeder.StandardCategoryId, 1) }, null));
 
@@ -54,5 +61,6 @@ public class BookingRetrievalTests
         var bookings = await response.Content.ReadFromJsonAsync<List<BookingDto>>();
 
         Assert.All(bookings!, b => Assert.Equal(DbSeeder.SecondCustomerId, b.UserId));
+        Assert.DoesNotContain(bookings!, b => b.Id == otherUsersBooking!.Id);
     }
 }
