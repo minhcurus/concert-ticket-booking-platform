@@ -21,6 +21,11 @@ public class BookingsController : ControllerBase
         _currentUser = currentUser;
     }
 
+    /// <summary>
+    /// Reserve tickets for a published concert, optionally applying a promotional voucher code.
+    /// Requires an <c>Idempotency-Key</c> header — retrying with the same key returns the
+    /// original booking instead of creating a duplicate.
+    /// </summary>
     [HttpPost]
     [EnableRateLimiting("booking")]
     public async Task<ActionResult<BookingDto>> Create(
@@ -37,10 +42,12 @@ public class BookingsController : ControllerBase
             : CreatedAtAction(nameof(GetById), new { id = result.Booking.Id }, result.Booking);
     }
 
+    /// <summary>List all bookings belonging to the current customer.</summary>
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<BookingDto>>> GetMine(CancellationToken ct)
         => Ok(await _bookingService.GetUserBookingsAsync(_currentUser.UserId!.Value, ct));
 
+    /// <summary>Get a single booking belonging to the current customer.</summary>
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<BookingDto>> GetById(Guid id, CancellationToken ct)
     {
@@ -48,10 +55,18 @@ public class BookingsController : ControllerBase
         return booking is null ? NotFound() : Ok(booking);
     }
 
+    /// <summary>
+    /// Simulate a successful payment for a booking that is still <c>PendingPayment</c> and
+    /// within its hold window.
+    /// </summary>
     [HttpPost("{id:guid}/confirm-payment")]
     public async Task<ActionResult<BookingDto>> ConfirmPayment(Guid id, CancellationToken ct)
         => Ok(await _bookingService.ConfirmPaymentAsync(_currentUser.UserId!.Value, id, ct));
 
+    /// <summary>
+    /// Cancel the current customer's own <c>PendingPayment</c> booking, releasing reserved
+    /// inventory and any voucher redemption.
+    /// </summary>
     [HttpPost("{id:guid}/cancel")]
     public async Task<ActionResult<BookingDto>> Cancel(Guid id, CancellationToken ct)
         => Ok(await _bookingService.CancelBookingAsync(_currentUser.UserId!.Value, id, ct));

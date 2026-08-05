@@ -13,6 +13,7 @@ public class ConcertsController : ControllerBase
     private readonly ICatalogService _catalogService;
     public ConcertsController(ICatalogService catalogService) => _catalogService = catalogService;
 
+    /// <summary>List published concerts, paginated.</summary>
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
     {
@@ -27,6 +28,10 @@ public class ConcertsController : ControllerBase
         return Ok(await _catalogService.GetPublishedConcertsAsync(page, pageSize, ct));
     }
 
+    /// <summary>
+    /// Get a published concert's detail, including ticket categories, prices, and live
+    /// availability.
+    /// </summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
