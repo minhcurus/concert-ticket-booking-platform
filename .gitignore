@@ -1,4 +1,5 @@
 *.pdf
+appsettings.Development.json
 
 bin/
 obj/

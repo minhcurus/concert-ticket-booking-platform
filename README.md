@@ -23,11 +23,23 @@ No other local install is required — PostgreSQL and Redis run in containers.
 # 1. Start PostgreSQL + Redis
 docker compose up -d
 
-# 2. Run the API (auto-applies EF Core migrations and seeds demo data on first run —
+# 2. Create your local connection-string file (gitignored — never committed,
+#    since it's the one place credentials could end up; values below match
+#    docker-compose.yml's postgres/redis services)
+cat > ConcertBooking.Api/appsettings.Development.json <<'JSON'
+{
+  "ConnectionStrings": {
+    "Postgres": "Host=localhost;Port=5432;Database=concertbooking;Username=concertbooking;Password=concertbooking",
+    "Redis": "localhost:6379"
+  }
+}
+JSON
+
+# 3. Run the API (auto-applies EF Core migrations and seeds demo data on first run —
 #    see "Database & Migrations" below)
 dotnet run --project ConcertBooking.Api
 
-# 3. Verify it's up
+# 4. Verify it's up
 curl http://localhost:5018/health
 # -> {"status":"healthy"}
 ```
@@ -54,8 +66,10 @@ dotnet ef migrations add <Name> --project ConcertBooking.Api
 dotnet ef database update --project ConcertBooking.Api
 ```
 
-Connection strings are in `ConcertBooking.Api/appsettings.Development.json` and match
-`docker-compose.yml`'s `postgres`/`redis` services out of the box.
+`ConcertBooking.Api/appsettings.Development.json` is gitignored — it's never committed, since
+it's the one place local credentials could end up. See step 2 of **Local Setup** above to create
+it; the connection strings it needs match `docker-compose.yml`'s `postgres`/`redis` services
+out of the box.
 
 ## Running Tests
 
