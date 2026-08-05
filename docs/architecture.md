@@ -203,12 +203,20 @@ design, not auth infrastructure.
 
 ## Testing strategy
 
-- **Unit tests** (xUnit) — pure logic with no I/O: voucher discount calculation,
-  status-transition rules, DTO validation.
-- **Integration tests** — Testcontainers for .NET, spinning up real PostgreSQL + Redis
-  containers. EF Core's InMemory provider is not used for anything concurrency-related,
-  since it can't exercise real transaction/locking semantics. Covers the full
-  booking → confirm → cancel lifecycle, voucher redemption limits, and the hold-expiry sweep.
+- **Unit tests** (xUnit, `ConcertBooking.Tests/Unit/`) — reserved for logic that's genuinely
+  pure (no I/O, no DbContext): currently just voucher discount calculation
+  (`VoucherDiscountCalculatorTests.cs`). Status-transition rules and request validation are
+  deliberately *not* here — they're written inline inside the same transactional service
+  methods that touch the DB (e.g. `BookingService.ConfirmPaymentAsync`/`CancelAsync`,
+  `OperatorConcertService`), not factored into standalone pure functions, so a mocked-DbContext
+  unit test would mostly just be re-asserting the mock's own setup rather than proving anything.
+- **Integration tests** (`ConcertBooking.Tests/Integration/`) — Testcontainers for .NET,
+  spinning up real PostgreSQL + Redis containers. EF Core's InMemory provider is not used for
+  anything concurrency-related, since it can't exercise real transaction/locking semantics.
+  This is where status-transition rules and request validation actually get their coverage
+  (`PaymentConfirmationTests.cs`, `BookingCancellationTests.cs`, `BookingCreationTests.cs`,
+  `OperatorConcertWriteTests.cs`, ...), alongside the full booking → confirm → cancel
+  lifecycle, voucher redemption limits, and the hold-expiry sweep.
 - **Flagship concurrency test** — fire N concurrent booking requests (`Task.WhenAll`) against
   a `TicketCategory` seeded with a small `AvailableQuantity` (e.g. 5 requests × 3 tickets
   against 10 available). Assert: total tickets ever booked ≤ `TotalQuantity`, no negative
