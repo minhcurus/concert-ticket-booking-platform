@@ -64,11 +64,11 @@ Modules (folders, not projects), each a thin controller + a service:
 - **Booking** — the concurrency-critical core: reservation, hold expiry, payment
   confirmation, cancellation.
 - **Voucher** — seeded data + validation/redemption logic invoked *inside* the booking
-  transaction. No standalone voucher CRUD API (see "Out of scope").
+  transaction. No standalone voucher CRUD API (see [ASSUMPTIONS.md](ASSUMPTIONS.md)).
 - **Operator** — concert publishing, booking monitoring, manual status override, flagging.
   Reuses Catalog/Booking services rather than duplicating logic.
 - **Identity** — minimal: seeded `Users` table with a `Role`, current user resolved from an
-  `X-User-Id` header via middleware. No passwords, no JWT (see "Out of scope").
+  `X-User-Id` header via middleware. No passwords, no JWT (see [ASSUMPTIONS.md](ASSUMPTIONS.md)).
 
 A `BackgroundService`, coordinated by a Redis leader-lock so it's safe if ever scaled to
 multiple instances, sweeps expired reservation holds on a timer.
